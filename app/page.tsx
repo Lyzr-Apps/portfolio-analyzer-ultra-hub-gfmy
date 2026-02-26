@@ -1119,22 +1119,31 @@ export default function Page() {
     setReportHistory(loadReportHistory())
   }, [])
 
-  // Load schedule info
-  const loadScheduleData = useCallback(async () => {
+  // Load schedule info with retry logic for initial load
+  const loadScheduleData = useCallback(async (retries = 2, delayMs = 1500) => {
     setScheduleLoading(true)
-    try {
-      const listResult = await listSchedules()
-      if (listResult.success && Array.isArray(listResult.schedules)) {
-        const found = listResult.schedules.find(s => s.id === scheduleId)
-        if (found) {
-          setSchedule(found)
-        } else if (listResult.schedules.length > 0) {
-          // If schedule ID changed (from updateScheduleMessage), find the most recent
-          setSchedule(listResult.schedules[0])
-          setScheduleId(listResult.schedules[0].id)
-        }
+    let attempt = 0
+    let success = false
+
+    while (attempt <= retries && !success) {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, delayMs))
       }
-    } catch { /* ignore */ }
+      try {
+        const listResult = await listSchedules()
+        if (listResult.success && Array.isArray(listResult.schedules)) {
+          const found = listResult.schedules.find(s => s.id === scheduleId)
+          if (found) {
+            setSchedule(found)
+          } else if (listResult.schedules.length > 0) {
+            setSchedule(listResult.schedules[0])
+            setScheduleId(listResult.schedules[0].id)
+          }
+          success = true
+        }
+      } catch { /* retry */ }
+      attempt++
+    }
 
     try {
       const logsResult = await getScheduleLogs(scheduleId, { limit: 5 })
@@ -1145,8 +1154,12 @@ export default function Page() {
     setScheduleLoading(false)
   }, [scheduleId])
 
+  // Delay initial schedule load to let sandbox/proxy stabilize
   useEffect(() => {
-    loadScheduleData()
+    const timer = setTimeout(() => {
+      loadScheduleData()
+    }, 1200)
+    return () => clearTimeout(timer)
   }, [loadScheduleData])
 
   // Loading message rotation
