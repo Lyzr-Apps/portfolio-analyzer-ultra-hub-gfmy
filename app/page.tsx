@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { callAIAgent, AIAgentResponse } from '@/lib/aiAgent'
 import { listSchedules, pauseSchedule, resumeSchedule, getScheduleLogs, cronToHuman, updateScheduleMessage, Schedule, ExecutionLog } from '@/lib/scheduler'
-import { FiTrendingUp, FiBarChart2, FiClock, FiMail, FiSettings, FiPlay, FiPause, FiRefreshCw, FiChevronDown, FiChevronUp, FiAlertCircle, FiCheckCircle, FiActivity, FiGrid, FiList, FiCalendar, FiArrowUp, FiArrowDown, FiX, FiUpload, FiPlus, FiEdit2, FiTrash2, FiDollarSign, FiDownload } from 'react-icons/fi'
+import { FiTrendingUp, FiBarChart2, FiClock, FiMail, FiSettings, FiPlay, FiPause, FiRefreshCw, FiChevronDown, FiChevronUp, FiAlertCircle, FiCheckCircle, FiActivity, FiGrid, FiList, FiCalendar, FiArrowUp, FiArrowDown, FiX, FiUpload, FiPlus, FiEdit2, FiTrash2, FiDollarSign, FiDownload, FiZap, FiLayers, FiFilter } from 'react-icons/fi'
 
 // ─── Agent IDs ───────────────────────────────────────────────────────────────
 const COORDINATOR_AGENT_ID = '69a023c473b2968d073614b6'
@@ -63,6 +63,7 @@ interface Holding {
   shares: number
   acquisitionPrice: number
   investmentSize: number
+  source?: string
 }
 
 interface AppSettings {
@@ -82,11 +83,27 @@ interface HistoryEntry {
 // ─── Constants ───────────────────────────────────────────────────────────────
 const DEFAULT_TICKERS = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL']
 const DEFAULT_HOLDINGS: Holding[] = [
-  { ticker: 'AAPL', shares: 10, acquisitionPrice: 175.00, investmentSize: 1750.00 },
-  { ticker: 'TSLA', shares: 5, acquisitionPrice: 240.00, investmentSize: 1200.00 },
-  { ticker: 'NVDA', shares: 8, acquisitionPrice: 750.00, investmentSize: 6000.00 },
-  { ticker: 'MSFT', shares: 6, acquisitionPrice: 400.00, investmentSize: 2400.00 },
-  { ticker: 'GOOGL', shares: 12, acquisitionPrice: 142.00, investmentSize: 1704.00 },
+  { ticker: 'AAPL', shares: 10, acquisitionPrice: 175.00, investmentSize: 1750.00, source: 'Manual' },
+  { ticker: 'TSLA', shares: 5, acquisitionPrice: 240.00, investmentSize: 1200.00, source: 'Manual' },
+  { ticker: 'NVDA', shares: 8, acquisitionPrice: 750.00, investmentSize: 6000.00, source: 'Manual' },
+  { ticker: 'MSFT', shares: 6, acquisitionPrice: 400.00, investmentSize: 2400.00, source: 'Manual' },
+  { ticker: 'GOOGL', shares: 12, acquisitionPrice: 142.00, investmentSize: 1704.00, source: 'Manual' },
+]
+
+const PORTFOLIO_SOURCES = [
+  'Manual',
+  'Trading212',
+  'Moneyfarm',
+  'Triodos',
+  'Interactive Brokers',
+  'Vanguard',
+  'Fidelity',
+  'Hargreaves Lansdown',
+  'Degiro',
+  'eToro',
+  'Revolut',
+  'Freetrade',
+  'Other',
 ]
 const DEFAULT_SETTINGS: AppSettings = {
   tickers: DEFAULT_TICKERS,
@@ -231,10 +248,13 @@ function loadSettings(): AppSettings {
       // Backward compat: if holdings is missing but tickers exist, create skeleton holdings
       if (!Array.isArray(merged.holdings) || merged.holdings.length === 0) {
         if (Array.isArray(merged.tickers) && merged.tickers.length > 0) {
-          merged.holdings = merged.tickers.map((t: string) => ({ ticker: t, shares: 0, acquisitionPrice: 0, investmentSize: 0 }))
+          merged.holdings = merged.tickers.map((t: string) => ({ ticker: t, shares: 0, acquisitionPrice: 0, investmentSize: 0, source: 'Manual' }))
         } else {
           merged.holdings = DEFAULT_HOLDINGS
         }
+      } else {
+        // Backward compat: add source field to existing holdings that lack it
+        merged.holdings = merged.holdings.map((h: Holding) => ({ ...h, source: h.source || 'Manual' }))
       }
       return merged
     }
@@ -296,7 +316,7 @@ function getRiskColor(risk: string): string {
 
 // ─── CSV / Portfolio Helpers ─────────────────────────────────────────────────
 
-function parseCSVToHoldings(csvText: string): { holdings: Holding[]; errors: string[] } {
+function parseCSVToHoldings(csvText: string, source: string = 'CSV Import'): { holdings: Holding[]; errors: string[] } {
   const lines = csvText.trim().split('\n').map(l => l.trim()).filter(Boolean)
   if (lines.length === 0) return { holdings: [], errors: ['CSV file is empty'] }
 
@@ -337,10 +357,52 @@ function parseCSVToHoldings(csvText: string): { holdings: Holding[]; errors: str
       shares,
       acquisitionPrice: isNaN(acqPrice) ? 0 : acqPrice,
       investmentSize: isNaN(investmentSize) ? 0 : investmentSize,
+      source,
     })
   }
 
   return { holdings, errors }
+}
+
+/** Merge new holdings into existing ones, accumulating from different sources */
+function mergeHoldings(existing: Holding[], incoming: Holding[], source: string): Holding[] {
+  const result = [...existing]
+  for (const newH of incoming) {
+    const tagged = { ...newH, source: newH.source || source }
+    // Check if same ticker from same source already exists — update it
+    const existIdx = result.findIndex(h => h.ticker === tagged.ticker && h.source === tagged.source)
+    if (existIdx >= 0) {
+      result[existIdx] = tagged
+    } else {
+      result.push(tagged)
+    }
+  }
+  return result
+}
+
+/** Build the LLM prompt for smart file parsing */
+function buildSmartImportPrompt(fileContent: string, fileName: string): string {
+  return `You are a financial data extraction assistant. I have uploaded a portfolio export file from an investment platform.
+
+File name: ${fileName}
+
+The file content is below. Extract ALL stock/fund/ETF holdings you can find. For each holding, extract:
+- ticker or symbol (the stock ticker like AAPL, TSLA, VUSA.L, etc.)
+- shares or quantity (number of shares/units held)
+- acquisition_price or average cost per share (if available, otherwise 0)
+- investment_size or total invested amount (if available, otherwise calculate from shares * price)
+
+Return ONLY a valid JSON array, no explanation. Example format:
+[{"ticker":"AAPL","shares":10,"acquisition_price":175.00,"investment_size":1750.00},{"ticker":"TSLA","shares":5,"acquisition_price":240.00,"investment_size":1200.00}]
+
+If the file contains non-stock items (cash, bonds, derivatives), skip them. If tickers are in a different format (e.g. ISIN, fund name), convert to the most common ticker symbol if possible, or use the identifier as-is.
+
+File content:
+---
+${fileContent.slice(0, 15000)}
+---
+
+Return ONLY the JSON array, nothing else.`
 }
 
 function generateCSVTemplate(): string {
@@ -358,18 +420,46 @@ function downloadCSV(content: string, filename: string) {
 }
 
 function holdingsToCSV(holdings: Holding[]): string {
-  const header = 'Ticker,Shares,Acquisition Price,Investment Size'
-  const rows = holdings.map(h => `${h.ticker},${h.shares},${h.acquisitionPrice.toFixed(2)},${h.investmentSize.toFixed(2)}`)
+  const header = 'Ticker,Shares,Acquisition Price,Investment Size,Source'
+  const rows = holdings.map(h => `${h.ticker},${h.shares},${h.acquisitionPrice.toFixed(2)},${h.investmentSize.toFixed(2)},${h.source || 'Manual'}`)
   return [header, ...rows].join('\n')
 }
 
 function buildPortfolioContext(holdings: Holding[]): string {
   if (!Array.isArray(holdings) || holdings.length === 0) return ''
   const totalInvested = holdings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
-  const lines = holdings.map(h =>
-    `${h.ticker}: ${h.shares} shares @ $${h.acquisitionPrice.toFixed(2)} (invested: $${h.investmentSize.toFixed(2)})`
-  )
-  return `\n\nPortfolio details (total invested: $${totalInvested.toFixed(2)}):\n${lines.join('\n')}\n\nPlease factor in acquisition prices when computing gains/losses and providing recommendations.`
+
+  // Group by source for clearer context
+  const bySource: Record<string, Holding[]> = {}
+  for (const h of holdings) {
+    const src = h.source || 'Manual'
+    if (!bySource[src]) bySource[src] = []
+    bySource[src].push(h)
+  }
+
+  const sources = Object.keys(bySource)
+  let context = `\n\nPortfolio details (total invested: $${totalInvested.toFixed(2)}, across ${sources.length} source${sources.length !== 1 ? 's' : ''}):\n`
+
+  for (const src of sources) {
+    const srcHoldings = bySource[src]
+    const srcTotal = srcHoldings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
+    context += `\n[${src}] (subtotal: $${srcTotal.toFixed(2)}):\n`
+    for (const h of srcHoldings) {
+      context += `  ${h.ticker}: ${h.shares} shares @ $${h.acquisitionPrice.toFixed(2)} (invested: $${h.investmentSize.toFixed(2)})\n`
+    }
+  }
+
+  context += '\nPlease factor in acquisition prices when computing gains/losses and providing recommendations across all portfolio sources.'
+  return context
+}
+
+/** Get unique sources from holdings */
+function getUniqueSources(holdings: Holding[]): string[] {
+  const sources = new Set<string>()
+  for (const h of holdings) {
+    sources.add(h.source || 'Manual')
+  }
+  return Array.from(sources).sort()
 }
 
 // ─── ErrorBoundary ───────────────────────────────────────────────────────────
@@ -772,7 +862,7 @@ function SummaryTiles({ report, holdings }: { report: PortfolioReport | null; ho
           <FiDollarSign className="w-4 h-4 text-primary" />
           {totalInvested > 0 ? totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--'}
         </div>
-        <p className="text-xs text-muted-foreground mt-1">{totalShares} total shares across {safeHoldings.length} positions</p>
+        <p className="text-xs text-muted-foreground mt-1">{totalShares} total shares across {safeHoldings.length} positions{getUniqueSources(safeHoldings).length > 1 ? ` from ${getUniqueSources(safeHoldings).length} sources` : ''}</p>
       </div>
 
       {/* Top Gainer */}
@@ -975,7 +1065,7 @@ function HistoryScreen({ history, selectedReport, onSelect, onClear, sampleMode 
   )
 }
 
-function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, executionLogs, onScheduleToggle, onRefreshSchedule, onSaveEmail, scheduleLoading, statusMessage }: {
+function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, executionLogs, onScheduleToggle, onRefreshSchedule, onSaveEmail, scheduleLoading, statusMessage, onSmartImport }: {
   settings: AppSettings
   onSettingsChange: (s: AppSettings) => void
   schedule: Schedule | null
@@ -986,21 +1076,36 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
   onSaveEmail: (email: string) => void
   scheduleLoading: boolean
   statusMessage: { type: 'success' | 'error' | 'info'; text: string } | null
+  onSmartImport: (fileContent: string, fileName: string, source: string) => Promise<void>
 }) {
   const [localEmail, setLocalEmail] = useState(settings.email)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
   const [showAddHolding, setShowAddHolding] = useState(false)
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
-  const [holdingForm, setHoldingForm] = useState<{ ticker: string; shares: string; acqPrice: string; investmentSize: string }>({ ticker: '', shares: '', acqPrice: '', investmentSize: '' })
+  const [holdingForm, setHoldingForm] = useState<{ ticker: string; shares: string; acqPrice: string; investmentSize: string; source: string }>({ ticker: '', shares: '', acqPrice: '', investmentSize: '', source: 'Manual' })
   const [csvErrors, setCsvErrors] = useState<string[]>([])
   const [uploadMsg, setUploadMsg] = useState<string | null>(null)
+  const [importSource, setImportSource] = useState('Manual')
+  const [customSource, setCustomSource] = useState('')
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null)
+  const [smartImportLoading, setSmartImportLoading] = useState(false)
   const fileInputRef = React.useRef<HTMLInputElement>(null)
+  const smartFileInputRef = React.useRef<HTMLInputElement>(null)
+  const jsonFileInputRef = React.useRef<HTMLInputElement>(null)
 
   const safeHoldings = Array.isArray(settings.holdings) ? settings.holdings : []
+  const filteredHoldings = sourceFilter ? safeHoldings.filter(h => (h.source || 'Manual') === sourceFilter) : safeHoldings
   const totalInvested = safeHoldings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
+  const filteredTotal = filteredHoldings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
+  const uniqueSources = getUniqueSources(safeHoldings)
+
+  const getEffectiveSource = () => {
+    if (importSource === 'Other') return customSource.trim() || 'Other'
+    return importSource
+  }
 
   const resetForm = () => {
-    setHoldingForm({ ticker: '', shares: '', acqPrice: '', investmentSize: '' })
+    setHoldingForm({ ticker: '', shares: '', acqPrice: '', investmentSize: '', source: 'Manual' })
     setShowAddHolding(false)
     setEditingIdx(null)
   }
@@ -1015,16 +1120,16 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
       investmentSize = shares * acqPrice
     }
 
-    const newHolding: Holding = { ticker, shares, acquisitionPrice: acqPrice, investmentSize }
+    const newHolding: Holding = { ticker, shares, acquisitionPrice: acqPrice, investmentSize, source: holdingForm.source || 'Manual' }
 
     let updatedHoldings: Holding[]
-    let updatedTickers: string[]
 
     if (editingIdx !== null) {
       updatedHoldings = [...safeHoldings]
       updatedHoldings[editingIdx] = newHolding
     } else {
-      const existingIdx = safeHoldings.findIndex(h => h.ticker === ticker)
+      // When adding manually, check same ticker + same source
+      const existingIdx = safeHoldings.findIndex(h => h.ticker === ticker && (h.source || 'Manual') === (newHolding.source || 'Manual'))
       if (existingIdx >= 0) {
         updatedHoldings = [...safeHoldings]
         updatedHoldings[existingIdx] = newHolding
@@ -1033,28 +1138,42 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
       }
     }
 
-    updatedTickers = updatedHoldings.map(h => h.ticker)
+    const updatedTickers = [...new Set(updatedHoldings.map(h => h.ticker))]
     onSettingsChange({ ...settings, holdings: updatedHoldings, tickers: updatedTickers })
     resetForm()
   }
 
   const handleRemoveHolding = (idx: number) => {
-    const updatedHoldings = safeHoldings.filter((_, i) => i !== idx)
-    const updatedTickers = updatedHoldings.map(h => h.ticker)
+    // idx is relative to filtered view, need to find actual index
+    const holding = filteredHoldings[idx]
+    if (!holding) return
+    const actualIdx = safeHoldings.indexOf(holding)
+    if (actualIdx < 0) return
+    const updatedHoldings = safeHoldings.filter((_, i) => i !== actualIdx)
+    const updatedTickers = [...new Set(updatedHoldings.map(h => h.ticker))]
     onSettingsChange({ ...settings, holdings: updatedHoldings, tickers: updatedTickers })
   }
 
   const handleEditHolding = (idx: number) => {
-    const h = safeHoldings[idx]
+    const h = filteredHoldings[idx]
     if (!h) return
+    const actualIdx = safeHoldings.indexOf(h)
     setHoldingForm({
       ticker: h.ticker,
       shares: h.shares.toString(),
       acqPrice: h.acquisitionPrice.toString(),
       investmentSize: h.investmentSize.toString(),
+      source: h.source || 'Manual',
     })
-    setEditingIdx(idx)
+    setEditingIdx(actualIdx)
     setShowAddHolding(true)
+  }
+
+  const handleRemoveSource = (source: string) => {
+    const updatedHoldings = safeHoldings.filter(h => (h.source || 'Manual') !== source)
+    const updatedTickers = [...new Set(updatedHoldings.map(h => h.ticker))]
+    onSettingsChange({ ...settings, holdings: updatedHoldings, tickers: updatedTickers })
+    if (sourceFilter === source) setSourceFilter(null)
   }
 
   const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1062,6 +1181,7 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
     if (!file) return
     setCsvErrors([])
     setUploadMsg(null)
+    const source = getEffectiveSource()
 
     const reader = new FileReader()
     reader.onload = (ev) => {
@@ -1070,19 +1190,19 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
         setCsvErrors(['Could not read file'])
         return
       }
-      const { holdings: parsed, errors } = parseCSVToHoldings(text)
+      const { holdings: parsed, errors } = parseCSVToHoldings(text, source)
       if (errors.length > 0) setCsvErrors(errors)
       if (parsed.length > 0) {
-        const updatedTickers = parsed.map(h => h.ticker)
-        onSettingsChange({ ...settings, holdings: parsed, tickers: updatedTickers })
-        setUploadMsg(`Imported ${parsed.length} holdings from CSV`)
+        const merged = mergeHoldings(safeHoldings, parsed, source)
+        const updatedTickers = [...new Set(merged.map(h => h.ticker))]
+        onSettingsChange({ ...settings, holdings: merged, tickers: updatedTickers })
+        setUploadMsg(`Added ${parsed.length} holdings from "${source}" (CSV)`)
         setTimeout(() => setUploadMsg(null), 4000)
       }
     }
     reader.onerror = () => setCsvErrors(['Failed to read file'])
     reader.readAsText(file)
 
-    // Reset the input so re-uploading the same file triggers onChange
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -1091,6 +1211,7 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
     if (!file) return
     setCsvErrors([])
     setUploadMsg(null)
+    const source = getEffectiveSource()
 
     const reader = new FileReader()
     reader.onload = (ev) => {
@@ -1109,12 +1230,13 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
           const shares = parseFloat(item.shares || item.Shares || item.quantity || item.Quantity || '0')
           const acqPrice = parseFloat(item.acquisitionPrice || item.acquisition_price || item.acqPrice || item.price || item.Price || item.cost || item.Cost || '0')
           const investmentSize = parseFloat(item.investmentSize || item.investment_size || item.invested || item.Invested || '0') || (shares * acqPrice)
-          parsed.push({ ticker, shares: isNaN(shares) ? 0 : shares, acquisitionPrice: isNaN(acqPrice) ? 0 : acqPrice, investmentSize: isNaN(investmentSize) ? 0 : investmentSize })
+          parsed.push({ ticker, shares: isNaN(shares) ? 0 : shares, acquisitionPrice: isNaN(acqPrice) ? 0 : acqPrice, investmentSize: isNaN(investmentSize) ? 0 : investmentSize, source })
         }
         if (parsed.length > 0) {
-          const updatedTickers = parsed.map(h => h.ticker)
-          onSettingsChange({ ...settings, holdings: parsed, tickers: updatedTickers })
-          setUploadMsg(`Imported ${parsed.length} holdings from JSON`)
+          const merged = mergeHoldings(safeHoldings, parsed, source)
+          const updatedTickers = [...new Set(merged.map(h => h.ticker))]
+          onSettingsChange({ ...settings, holdings: merged, tickers: updatedTickers })
+          setUploadMsg(`Added ${parsed.length} holdings from "${source}" (JSON)`)
           setTimeout(() => setUploadMsg(null), 4000)
         } else {
           setCsvErrors(['No valid holdings found in JSON. Expected array with objects containing: ticker, shares, acquisitionPrice, investmentSize'])
@@ -1124,6 +1246,37 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
       }
     }
     reader.readAsText(file)
+
+    if (jsonFileInputRef.current) jsonFileInputRef.current.value = ''
+  }
+
+  const handleSmartFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvErrors([])
+    setUploadMsg(null)
+    setSmartImportLoading(true)
+    const source = getEffectiveSource()
+
+    const reader = new FileReader()
+    reader.onload = async (ev) => {
+      const text = ev.target?.result as string
+      if (!text) {
+        setCsvErrors(['Could not read file'])
+        setSmartImportLoading(false)
+        return
+      }
+      try {
+        await onSmartImport(text, file.name, source)
+      } catch (err) {
+        setCsvErrors([err instanceof Error ? err.message : 'Smart import failed'])
+      }
+      setSmartImportLoading(false)
+    }
+    reader.onerror = () => { setCsvErrors(['Failed to read file']); setSmartImportLoading(false) }
+    reader.readAsText(file)
+
+    if (smartFileInputRef.current) smartFileInputRef.current.value = ''
   }
 
   const handleSave = () => {
@@ -1173,43 +1326,104 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
             <div className="flex items-center gap-2">
               <span className="text-xs text-muted-foreground font-mono">
                 {safeHoldings.length} position{safeHoldings.length !== 1 ? 's' : ''} | ${totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2 })} invested
+                {uniqueSources.length > 1 && ` | ${uniqueSources.length} sources`}
               </span>
+            </div>
+          </div>
+
+          {/* Source Selector for Imports */}
+          <div className="mb-5 p-4 bg-secondary border border-border">
+            <div className="flex items-center gap-2 mb-3">
+              <FiLayers className="w-4 h-4 text-primary" />
+              <span className="text-xs tracking-widest uppercase font-medium">Import Source</span>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3 leading-relaxed">
+              Select the source platform before importing. Holdings from different sources accumulate — they won't replace existing positions from other sources.
+            </p>
+            <div className="flex items-center gap-3">
+              <select
+                value={importSource}
+                onChange={(e) => setImportSource(e.target.value)}
+                className="flex-1 px-3 py-2 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              >
+                {PORTFOLIO_SOURCES.map(src => <option key={src} value={src}>{src}</option>)}
+              </select>
+              {importSource === 'Other' && (
+                <input
+                  type="text"
+                  value={customSource}
+                  onChange={(e) => setCustomSource(e.target.value)}
+                  placeholder="Custom source name..."
+                  className="flex-1 px-3 py-2 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              )}
             </div>
           </div>
 
           {/* Import / Export Actions */}
           <div className="flex flex-wrap items-center gap-2 mb-5 pb-5 border-b border-border">
-            <input type="file" ref={fileInputRef} accept=".csv,.tsv,.txt" onChange={handleCSVUpload} className="hidden" id="csv-upload" />
+            {/* Smart Import — LLM-powered */}
+            <input type="file" ref={smartFileInputRef} accept="*" onChange={handleSmartFileUpload} className="hidden" />
+            <button
+              onClick={() => smartFileInputRef.current?.click()}
+              disabled={smartImportLoading}
+              className="px-4 py-2 bg-primary text-primary-foreground text-xs tracking-wider flex items-center gap-2 disabled:opacity-50"
+            >
+              {smartImportLoading ? <FiRefreshCw className="w-3 h-3 animate-spin" /> : <FiZap className="w-3 h-3" />}
+              {smartImportLoading ? 'Parsing...' : 'Smart Import'}
+            </button>
+
+            {/* Structured CSV */}
+            <input type="file" ref={fileInputRef} accept=".csv,.tsv,.txt" onChange={handleCSVUpload} className="hidden" />
             <button
               onClick={() => fileInputRef.current?.click()}
               className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
             >
-              <FiUpload className="w-3 h-3" /> Import CSV
+              <FiUpload className="w-3 h-3" /> CSV
             </button>
-            <input type="file" accept=".json" onChange={handleJSONUpload} className="hidden" id="json-upload" />
-            <label htmlFor="json-upload" className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2 cursor-pointer">
-              <FiUpload className="w-3 h-3" /> Import JSON
-            </label>
+
+            {/* Structured JSON */}
+            <input type="file" ref={jsonFileInputRef} accept=".json" onChange={handleJSONUpload} className="hidden" />
+            <button
+              onClick={() => jsonFileInputRef.current?.click()}
+              className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
+            >
+              <FiUpload className="w-3 h-3" /> JSON
+            </button>
+
+            {/* Template & Export */}
             <button
               onClick={() => downloadCSV(generateCSVTemplate(), 'portfolio_template.csv')}
               className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
             >
-              <FiDownload className="w-3 h-3" /> CSV Template
+              <FiDownload className="w-3 h-3" /> Template
             </button>
             {safeHoldings.length > 0 && (
               <button
                 onClick={() => downloadCSV(holdingsToCSV(safeHoldings), 'my_portfolio.csv')}
                 className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
               >
-                <FiDownload className="w-3 h-3" /> Export CSV
+                <FiDownload className="w-3 h-3" /> Export
               </button>
             )}
             <button
-              onClick={() => { resetForm(); setShowAddHolding(true) }}
-              className="px-4 py-2 bg-primary text-primary-foreground text-xs tracking-wider flex items-center gap-2"
+              onClick={() => { resetForm(); setHoldingForm(prev => ({ ...prev, source: getEffectiveSource() })); setShowAddHolding(true) }}
+              className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
             >
-              <FiPlus className="w-3 h-3" /> Add Holding
+              <FiPlus className="w-3 h-3" /> Manual
             </button>
+          </div>
+
+          {/* Smart Import Info */}
+          <div className="mb-5 p-3 bg-secondary border border-border text-xs text-muted-foreground">
+            <div className="flex items-center gap-2 mb-1">
+              <FiZap className="w-3 h-3 text-primary" />
+              <span className="font-medium text-foreground">Smart Import</span>
+            </div>
+            <p className="leading-relaxed">
+              Upload any file from Trading212, Moneyfarm, Triodos, or any broker — CSV, Excel exports, PDF statements, or any text format.
+              The AI will analyze the file and extract your holdings automatically. Structured CSV/JSON imports are also available for standard formats.
+            </p>
           </div>
 
           {/* Upload messages */}
@@ -1227,10 +1441,43 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
             </div>
           )}
 
-          {/* CSV Format Hint */}
-          <div className="mb-5 p-3 bg-secondary border border-border text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">CSV format:</span> Ticker, Shares, Acquisition Price, Investment Size (one row per holding). Headers are optional. Delimiter: comma, semicolon, or tab. JSON: array of objects with ticker, shares, acquisitionPrice, investmentSize fields.
-          </div>
+          {/* Source Tags & Filter */}
+          {uniqueSources.length > 0 && (
+            <div className="mb-5">
+              <div className="flex items-center gap-2 mb-2">
+                <FiFilter className="w-3 h-3 text-muted-foreground" />
+                <span className="text-xs tracking-widest text-muted-foreground uppercase">Filter by Source</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={() => setSourceFilter(null)}
+                  className={`px-3 py-1 text-xs tracking-wider border transition-colors ${!sourceFilter ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-foreground border-border hover:bg-muted'}`}
+                >
+                  All ({safeHoldings.length})
+                </button>
+                {uniqueSources.map(src => {
+                  const count = safeHoldings.filter(h => (h.source || 'Manual') === src).length
+                  return (
+                    <div key={src} className="flex items-center gap-0">
+                      <button
+                        onClick={() => setSourceFilter(sourceFilter === src ? null : src)}
+                        className={`px-3 py-1 text-xs tracking-wider border border-r-0 transition-colors ${sourceFilter === src ? 'bg-primary text-primary-foreground border-primary' : 'bg-secondary text-foreground border-border hover:bg-muted'}`}
+                      >
+                        {src} ({count})
+                      </button>
+                      <button
+                        onClick={() => handleRemoveSource(src)}
+                        className="px-1.5 py-1 text-xs border border-border bg-secondary text-muted-foreground hover:text-red-600 hover:border-red-300 transition-colors"
+                        title={`Remove all ${src} holdings`}
+                      >
+                        <FiX className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Add/Edit Holding Form */}
           {showAddHolding && (
@@ -1249,6 +1496,16 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
                     placeholder="e.g. AAPL"
                     className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
                   />
+                </div>
+                <div>
+                  <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Source</label>
+                  <select
+                    value={holdingForm.source}
+                    onChange={(e) => setHoldingForm(prev => ({ ...prev, source: e.target.value }))}
+                    className="w-full px-3 py-2 border border-border bg-background text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    {PORTFOLIO_SOURCES.map(src => <option key={src} value={src}>{src}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Number of Shares</label>
@@ -1274,7 +1531,7 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
                     className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>
-                <div>
+                <div className="col-span-2">
                   <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Investment Size ($)</label>
                   <input
                     type="number"
@@ -1282,7 +1539,7 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
                     min="0"
                     value={holdingForm.investmentSize}
                     onChange={(e) => setHoldingForm(prev => ({ ...prev, investmentSize: e.target.value }))}
-                    placeholder="Auto-calculated"
+                    placeholder="Auto-calculated from shares x price"
                     className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
                   />
                 </div>
@@ -1303,12 +1560,13 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
           )}
 
           {/* Holdings Table */}
-          {safeHoldings.length > 0 ? (
+          {filteredHoldings.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border">
                     <th className="text-left py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Ticker</th>
+                    <th className="text-left py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Source</th>
                     <th className="text-right py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Shares</th>
                     <th className="text-right py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Acq. Price</th>
                     <th className="text-right py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Invested</th>
@@ -1316,9 +1574,12 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
                   </tr>
                 </thead>
                 <tbody>
-                  {safeHoldings.map((h, idx) => (
-                    <tr key={`${h.ticker}-${idx}`} className="border-b border-border last:border-0 hover:bg-muted transition-colors">
+                  {filteredHoldings.map((h, idx) => (
+                    <tr key={`${h.ticker}-${h.source}-${idx}`} className="border-b border-border last:border-0 hover:bg-muted transition-colors">
                       <td className="py-3 px-3 font-mono font-medium">{h.ticker}</td>
+                      <td className="py-3 px-3">
+                        <span className="text-xs px-2 py-0.5 bg-secondary border border-border tracking-wider">{h.source || 'Manual'}</span>
+                      </td>
                       <td className="py-3 px-3 text-right font-mono">{h.shares}</td>
                       <td className="py-3 px-3 text-right font-mono">${h.acquisitionPrice.toFixed(2)}</td>
                       <td className="py-3 px-3 text-right font-mono">${h.investmentSize.toFixed(2)}</td>
@@ -1337,10 +1598,15 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
                 </tbody>
                 <tfoot>
                   <tr className="border-t border-border bg-secondary">
-                    <td className="py-3 px-3 text-xs tracking-widest text-muted-foreground uppercase font-medium">Total</td>
-                    <td className="py-3 px-3 text-right font-mono font-medium">{safeHoldings.reduce((s, h) => s + h.shares, 0)}</td>
+                    <td className="py-3 px-3 text-xs tracking-widest text-muted-foreground uppercase font-medium">
+                      {sourceFilter ? `${sourceFilter} Total` : 'Total'}
+                    </td>
+                    <td className="py-3 px-3 text-xs text-muted-foreground">
+                      {sourceFilter ? '' : `${uniqueSources.length} source${uniqueSources.length !== 1 ? 's' : ''}`}
+                    </td>
+                    <td className="py-3 px-3 text-right font-mono font-medium">{filteredHoldings.reduce((s, h) => s + h.shares, 0)}</td>
                     <td className="py-3 px-3 text-right font-mono text-muted-foreground">--</td>
-                    <td className="py-3 px-3 text-right font-mono font-medium">${totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                    <td className="py-3 px-3 text-right font-mono font-medium">${filteredTotal.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                     <td></td>
                   </tr>
                 </tfoot>
@@ -1349,7 +1615,11 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               <FiBarChart2 className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No holdings configured. Add holdings manually or import via CSV/JSON.</p>
+              <p className="text-sm">
+                {sourceFilter
+                  ? `No holdings from "${sourceFilter}". Clear the filter to see all positions.`
+                  : 'No holdings configured. Use Smart Import to upload any broker export, or add holdings manually.'}
+              </p>
             </div>
           )}
         </div>
@@ -1533,6 +1803,7 @@ export default function Page() {
   const [scheduleLoading, setScheduleLoading] = useState(false)
   const [emailStatusMessage, setEmailStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [smartImportMsg, setSmartImportMsg] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null)
 
   // Load persisted state
   useEffect(() => {
@@ -1685,6 +1956,93 @@ export default function Page() {
     setTimeout(() => setEmailStatusMessage(null), 5000)
   }, [scheduleId, settings.tickers, settings.holdings, loadScheduleData])
 
+  // Smart Import — send file to LLM for parsing
+  const handleSmartImport = useCallback(async (fileContent: string, fileName: string, source: string) => {
+    setActiveAgentId(COORDINATOR_AGENT_ID)
+    setSmartImportMsg({ type: 'info', text: `Analyzing "${fileName}" with AI...` })
+    const prompt = buildSmartImportPrompt(fileContent, fileName)
+
+    try {
+      const result = await callAIAgent(prompt, COORDINATOR_AGENT_ID)
+
+      if (!result.success) {
+        setSmartImportMsg({ type: 'error', text: result?.error ?? 'Agent failed to parse file' })
+        throw new Error(result?.error ?? 'Agent failed to parse file')
+      }
+
+      // Extract the JSON array from the response
+      let responseText = ''
+      const res = result?.response?.result
+      if (typeof res === 'string') {
+        responseText = res
+      } else if (res && typeof res === 'object') {
+        if ('text' in res) responseText = (res as Record<string, unknown>).text as string
+        else if ('message' in res) responseText = (res as Record<string, unknown>).message as string
+        else if ('result' in res) {
+          const inner = (res as Record<string, unknown>).result
+          responseText = typeof inner === 'string' ? inner : JSON.stringify(inner)
+        } else {
+          responseText = JSON.stringify(res)
+        }
+      }
+
+      if (result?.response?.message && !responseText) {
+        responseText = result.response.message
+      }
+
+      // Try to extract JSON array from the response text
+      let parsed: Holding[] = []
+      const jsonMatch = responseText.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        try {
+          const arr = JSON.parse(jsonMatch[0])
+          if (Array.isArray(arr)) {
+            for (const item of arr) {
+              const ticker = (item.ticker || item.symbol || item.Ticker || item.Symbol || '').toString().toUpperCase().trim()
+              if (!ticker) continue
+              const shares = parseFloat(item.shares || item.quantity || '0')
+              const acqPrice = parseFloat(item.acquisition_price || item.acquisitionPrice || item.price || item.cost || item.avg_price || '0')
+              const investmentSize = parseFloat(item.investment_size || item.investmentSize || item.total || item.value || '0') || (shares > 0 && acqPrice > 0 ? shares * acqPrice : 0)
+              parsed.push({
+                ticker,
+                shares: isNaN(shares) ? 0 : shares,
+                acquisitionPrice: isNaN(acqPrice) ? 0 : acqPrice,
+                investmentSize: isNaN(investmentSize) ? 0 : investmentSize,
+                source,
+              })
+            }
+          }
+        } catch { /* JSON parse failed */ }
+      }
+
+      if (parsed.length === 0) {
+        const errMsg = 'Could not extract holdings from the uploaded file. The AI could not identify any stock positions in this format. Try a different file or use structured CSV/JSON import.'
+        setSmartImportMsg({ type: 'error', text: errMsg })
+        throw new Error(errMsg)
+      }
+
+      // Merge into existing holdings
+      const currentHoldings = Array.isArray(settings.holdings) ? settings.holdings : []
+      const merged = mergeHoldings(currentHoldings, parsed, source)
+      const updatedTickers = [...new Set(merged.map(h => h.ticker))]
+      const updated = { ...settings, holdings: merged, tickers: updatedTickers }
+      setSettings(updated)
+      saveSettings(updated)
+      setSmartImportMsg({ type: 'success', text: `Successfully extracted ${parsed.length} holdings from "${fileName}" into "${source}"` })
+      setTimeout(() => setSmartImportMsg(null), 6000)
+    } catch (err) {
+      // Only set error if we haven't already set one above
+      setSmartImportMsg(prev => {
+        if (prev?.type === 'error') return prev
+        return { type: 'error', text: err instanceof Error ? err.message : 'Smart import failed' }
+      })
+      setTimeout(() => setSmartImportMsg(null), 8000)
+      throw err
+    } finally {
+      setActiveAgentId(null)
+    }
+  }, [settings])
+
   // Clear history
   const handleClearHistory = () => {
     setReportHistory([])
@@ -1728,6 +2086,17 @@ export default function Page() {
               </div>
             )}
 
+            {/* Smart Import Status */}
+            {smartImportMsg && (
+              <div className={`mb-6 p-4 text-sm flex items-center justify-between ${smartImportMsg.type === 'success' ? 'bg-green-50 border border-green-200 text-green-800' : smartImportMsg.type === 'error' ? 'bg-red-50 border border-red-200 text-red-800' : 'bg-blue-50 border border-blue-200 text-blue-800'}`}>
+                <div className="flex items-center gap-2">
+                  {smartImportMsg.type === 'success' ? <FiCheckCircle className="w-4 h-4" /> : smartImportMsg.type === 'error' ? <FiAlertCircle className="w-4 h-4" /> : <FiRefreshCw className="w-4 h-4 animate-spin" />}
+                  {smartImportMsg.text}
+                </div>
+                <button onClick={() => setSmartImportMsg(null)}><FiX className="w-4 h-4" /></button>
+              </div>
+            )}
+
             {/* Screens */}
             {activeScreen === 'dashboard' && (
               <DashboardScreen
@@ -1760,6 +2129,7 @@ export default function Page() {
                 onSaveEmail={handleSaveEmail}
                 scheduleLoading={scheduleLoading}
                 statusMessage={emailStatusMessage}
+                onSmartImport={handleSmartImport}
               />
             )}
 
