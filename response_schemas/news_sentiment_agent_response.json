@@ -1,0 +1,50 @@
+{
+  "agent_name": "News & Sentiment Agent",
+  "agent_id": "69a023aed3c3061698671926",
+  "description": "Researches latest news headlines, analyst ratings, earnings updates, and overall market sentiment for each stock in the portfolio",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "stocks": [
+      {
+        "ticker": "string",
+        "company_name": "string",
+        "sentiment": "string",
+        "news_headlines": [
+          {
+            "headline": "string",
+            "source": "string",
+            "impact": "string"
+          }
+        ],
+        "analyst_updates": "string",
+        "earnings_info": "string",
+        "sector_trends": "string"
+      }
+    ],
+    "market_overview": "string",
+    "data_timestamp": "string"
+  },
+  "example_response": {
+    "stocks": [
+      {
+        "ticker": "sample string",
+        "company_name": "sample string",
+        "sentiment": "sample string",
+        "news_headlines": [
+          {
+            "headline": "sample string",
+            "source": "sample string",
+            "impact": "sample string"
+          }
+        ],
+        "analyst_updates": "sample string",
+        "earnings_info": "sample string",
+        "sector_trends": "sample string"
+      }
+    ],
+    "market_overview": "sample string",
+    "data_timestamp": "sample string"
+  }
+}

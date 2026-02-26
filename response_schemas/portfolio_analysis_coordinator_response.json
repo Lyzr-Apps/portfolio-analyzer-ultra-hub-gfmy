@@ -1,0 +1,98 @@
+{
+  "agent_name": "Portfolio Analysis Coordinator",
+  "agent_id": "69a023c473b2968d073614b6",
+  "description": "Orchestrates all sub-agents, aggregates their outputs into a comprehensive structured morning report with sections for price movements, sentiment, technicals, performance metrics, and recommendations",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "report_date": "string",
+    "executive_summary": "string",
+    "portfolio_health": "string",
+    "price_movements": [
+      {
+        "ticker": "string",
+        "company_name": "string",
+        "current_price": "string",
+        "price_change": "string",
+        "percent_change": "string",
+        "volume": "string"
+      }
+    ],
+    "sentiment_analysis": [
+      {
+        "ticker": "string",
+        "sentiment": "string",
+        "key_news": "string",
+        "analyst_outlook": "string"
+      }
+    ],
+    "technical_indicators": [
+      {
+        "ticker": "string",
+        "rsi": "string",
+        "macd_status": "string",
+        "sma_50": "string",
+        "sma_200": "string",
+        "support": "string",
+        "resistance": "string",
+        "technical_outlook": "string"
+      }
+    ],
+    "recommendations": [
+      {
+        "ticker": "string",
+        "action": "string",
+        "reasoning": "string",
+        "risk_level": "string"
+      }
+    ],
+    "risk_assessment": "string",
+    "market_overview": "string"
+  },
+  "example_response": {
+    "report_date": "sample string",
+    "executive_summary": "sample string",
+    "portfolio_health": "sample string",
+    "price_movements": [
+      {
+        "ticker": "sample string",
+        "company_name": "sample string",
+        "current_price": "sample string",
+        "price_change": "sample string",
+        "percent_change": "sample string",
+        "volume": "sample string"
+      }
+    ],
+    "sentiment_analysis": [
+      {
+        "ticker": "sample string",
+        "sentiment": "sample string",
+        "key_news": "sample string",
+        "analyst_outlook": "sample string"
+      }
+    ],
+    "technical_indicators": [
+      {
+        "ticker": "sample string",
+        "rsi": "sample string",
+        "macd_status": "sample string",
+        "sma_50": "sample string",
+        "sma_200": "sample string",
+        "support": "sample string",
+        "resistance": "sample string",
+        "technical_outlook": "sample string"
+      }
+    ],
+    "recommendations": [
+      {
+        "ticker": "sample string",
+        "action": "sample string",
+        "reasoning": "sample string",
+        "risk_level": "sample string"
+      }
+    ],
+    "risk_assessment": "sample string",
+    "market_overview": "sample string"
+  }
+}

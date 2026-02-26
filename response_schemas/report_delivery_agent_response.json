@@ -1,0 +1,22 @@
+{
+  "agent_name": "Report Delivery Agent",
+  "agent_id": "69a023dca2c9d4f61dfad0ea",
+  "description": "Takes the final aggregated report from the Manager and sends it as a formatted email to the user's configured email address via Gmail",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "delivery_status": "string",
+    "recipient_email": "string",
+    "email_subject": "string",
+    "sent_at": "string",
+    "message": "string"
+  },
+  "example_response": {
+    "delivery_status": "sample string",
+    "recipient_email": "sample string",
+    "email_subject": "sample string",
+    "sent_at": "sample string",
+    "message": "sample string"
+  }
+}

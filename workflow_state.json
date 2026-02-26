@@ -1,0 +1,31 @@
+{
+  "agents": {
+    "market_data_agent": {
+      "id": "69a023ad95ad8ebce61fe16f",
+      "name": "Market Data Agent"
+    },
+    "news_sentiment_agent": {
+      "id": "69a023aed3c3061698671926",
+      "name": "News & Sentiment Agent"
+    },
+    "technical_analysis_agent": {
+      "id": "69a023ae9c293c5b871a4b60",
+      "name": "Technical Analysis Agent"
+    },
+    "portfolio_coordinator": {
+      "id": "69a023c473b2968d073614b6",
+      "name": "Portfolio Analysis Coordinator"
+    },
+    "report_delivery_agent": {
+      "id": "69a023dca2c9d4f61dfad0ea",
+      "name": "Report Delivery Agent"
+    }
+  },
+  "schedule": {
+    "id": "69a023e325d4d77f732e4fa8",
+    "agent_id": "69a023c473b2968d073614b6",
+    "cron_expression": "0 7 * * *",
+    "timezone": "America/New_York",
+    "is_active": false
+  }
+}

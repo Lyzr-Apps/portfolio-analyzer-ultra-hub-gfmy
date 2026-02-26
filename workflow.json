@@ -1,0 +1,102 @@
+{
+  "workflow": {
+    "name": "StockPulse Portfolio Analysis System",
+    "description": "Multi-agent system that generates comprehensive daily portfolio analysis reports with market data, news sentiment, technical indicators, and actionable recommendations, delivered via email on a scheduled basis.",
+    "nodes": [
+      {
+        "id": "input_node",
+        "type": "Input",
+        "label": "Scheduled Trigger / Manual Request",
+        "nodeCategory": "input"
+      },
+      {
+        "id": "manager_agent",
+        "type": "Agent",
+        "label": "Portfolio Analysis Coordinator",
+        "nodeCategory": "agent",
+        "agent_id": "69a023c473b2968d073614b6",
+        "provider": "openai",
+        "model": "gpt-4.1",
+        "temperature": 0.3,
+        "top_p": 1,
+        "managed_agents": [
+          "69a023ad95ad8ebce61fe16f",
+          "69a023aed3c3061698671926",
+          "69a023ae9c293c5b871a4b60"
+        ]
+      },
+      {
+        "id": "market_data_agent",
+        "type": "Agent",
+        "label": "Market Data Agent",
+        "nodeCategory": "agent",
+        "agent_id": "69a023ad95ad8ebce61fe16f",
+        "provider": "perplexity",
+        "model": "sonar-pro",
+        "temperature": 0.2,
+        "top_p": 1
+      },
+      {
+        "id": "news_sentiment_agent",
+        "type": "Agent",
+        "label": "News & Sentiment Agent",
+        "nodeCategory": "agent",
+        "agent_id": "69a023aed3c3061698671926",
+        "provider": "perplexity",
+        "model": "sonar-pro",
+        "temperature": 0.2,
+        "top_p": 1
+      },
+      {
+        "id": "technical_analysis_agent",
+        "type": "Agent",
+        "label": "Technical Analysis Agent",
+        "nodeCategory": "agent",
+        "agent_id": "69a023ae9c293c5b871a4b60",
+        "provider": "perplexity",
+        "model": "sonar-pro",
+        "temperature": 0.2,
+        "top_p": 1
+      },
+      {
+        "id": "report_delivery_agent",
+        "type": "Agent",
+        "label": "Report Delivery Agent",
+        "nodeCategory": "agent",
+        "agent_id": "69a023dca2c9d4f61dfad0ea",
+        "provider": "openai",
+        "model": "gpt-4.1",
+        "temperature": 0.2,
+        "top_p": 1,
+        "tools": [
+          {
+            "tool_name": "gmail",
+            "tool_source": "composio",
+            "action_names": ["GMAIL_SEND_EMAIL"]
+          }
+        ]
+      },
+      {
+        "id": "output_node",
+        "type": "Output",
+        "label": "Email Delivered",
+        "nodeCategory": "end"
+      }
+    ],
+    "edges": [
+      { "source": "input_node", "target": "manager_agent" },
+      { "source": "manager_agent", "target": "market_data_agent" },
+      { "source": "manager_agent", "target": "news_sentiment_agent" },
+      { "source": "manager_agent", "target": "technical_analysis_agent" },
+      { "source": "manager_agent", "target": "report_delivery_agent" },
+      { "source": "report_delivery_agent", "target": "output_node" }
+    ],
+    "schedule": {
+      "schedule_id": "69a023e325d4d77f732e4fa8",
+      "cron_expression": "0 7 * * *",
+      "timezone": "America/New_York",
+      "description": "Daily at 7:00 AM Eastern Time",
+      "is_active": false
+    }
+  }
+}

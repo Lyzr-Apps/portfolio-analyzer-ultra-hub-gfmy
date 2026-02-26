@@ -1,0 +1,40 @@
+{
+  "agent_name": "Market Data Agent",
+  "agent_id": "69a023ad95ad8ebce61fe16f",
+  "description": "Fetches real-time and previous-close prices, percentage changes, volume, and market cap for each portfolio holding using web research",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "stocks": [
+      {
+        "ticker": "string",
+        "company_name": "string",
+        "current_price": "string",
+        "previous_close": "string",
+        "price_change": "string",
+        "percent_change": "string",
+        "volume": "string",
+        "market_cap": "string"
+      }
+    ],
+    "data_timestamp": "string",
+    "summary": "string"
+  },
+  "example_response": {
+    "stocks": [
+      {
+        "ticker": "sample string",
+        "company_name": "sample string",
+        "current_price": "sample string",
+        "previous_close": "sample string",
+        "price_change": "sample string",
+        "percent_change": "sample string",
+        "volume": "sample string",
+        "market_cap": "sample string"
+      }
+    ],
+    "data_timestamp": "sample string",
+    "summary": "sample string"
+  }
+}

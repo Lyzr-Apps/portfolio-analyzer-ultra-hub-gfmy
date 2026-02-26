@@ -1,0 +1,48 @@
+{
+  "agent_name": "Technical Analysis Agent",
+  "agent_id": "69a023ae9c293c5b871a4b60",
+  "description": "Retrieves key technical indicators (RSI, MACD, SMA/EMA, Bollinger Bands, support/resistance levels) and identifies chart patterns for each holding",
+  "agent_type": "json",
+  "accessor": "result",
+  "auto_generated": true,
+  "response_schema": {
+    "stocks": [
+      {
+        "ticker": "string",
+        "company_name": "string",
+        "rsi": "string",
+        "rsi_interpretation": "string",
+        "macd_status": "string",
+        "sma_50": "string",
+        "sma_200": "string",
+        "bollinger_position": "string",
+        "support_level": "string",
+        "resistance_level": "string",
+        "chart_patterns": "string",
+        "technical_outlook": "string"
+      }
+    ],
+    "overall_market_technicals": "string",
+    "data_timestamp": "string"
+  },
+  "example_response": {
+    "stocks": [
+      {
+        "ticker": "sample string",
+        "company_name": "sample string",
+        "rsi": "sample string",
+        "rsi_interpretation": "sample string",
+        "macd_status": "sample string",
+        "sma_50": "sample string",
+        "sma_200": "sample string",
+        "bollinger_position": "sample string",
+        "support_level": "sample string",
+        "resistance_level": "sample string",
+        "chart_patterns": "sample string",
+        "technical_outlook": "sample string"
+      }
+    ],
+    "overall_market_technicals": "sample string",
+    "data_timestamp": "sample string"
+  }
+}
