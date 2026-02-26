@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { callAIAgent, AIAgentResponse } from '@/lib/aiAgent'
 import { listSchedules, pauseSchedule, resumeSchedule, getScheduleLogs, cronToHuman, updateScheduleMessage, Schedule, ExecutionLog } from '@/lib/scheduler'
-import { FiTrendingUp, FiBarChart2, FiClock, FiMail, FiSettings, FiPlay, FiPause, FiRefreshCw, FiChevronDown, FiChevronUp, FiAlertCircle, FiCheckCircle, FiActivity, FiGrid, FiList, FiCalendar, FiArrowUp, FiArrowDown, FiX } from 'react-icons/fi'
+import { FiTrendingUp, FiBarChart2, FiClock, FiMail, FiSettings, FiPlay, FiPause, FiRefreshCw, FiChevronDown, FiChevronUp, FiAlertCircle, FiCheckCircle, FiActivity, FiGrid, FiList, FiCalendar, FiArrowUp, FiArrowDown, FiX, FiUpload, FiPlus, FiEdit2, FiTrash2, FiDollarSign, FiDownload } from 'react-icons/fi'
 
 // ─── Agent IDs ───────────────────────────────────────────────────────────────
 const COORDINATOR_AGENT_ID = '69a023c473b2968d073614b6'
@@ -58,8 +58,16 @@ interface PortfolioReport {
   generated_at?: string
 }
 
+interface Holding {
+  ticker: string
+  shares: number
+  acquisitionPrice: number
+  investmentSize: number
+}
+
 interface AppSettings {
   tickers: string[]
+  holdings: Holding[]
   email: string
   timezone: string
   scheduleTime: string
@@ -73,8 +81,16 @@ interface HistoryEntry {
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const DEFAULT_TICKERS = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'GOOGL']
+const DEFAULT_HOLDINGS: Holding[] = [
+  { ticker: 'AAPL', shares: 10, acquisitionPrice: 175.00, investmentSize: 1750.00 },
+  { ticker: 'TSLA', shares: 5, acquisitionPrice: 240.00, investmentSize: 1200.00 },
+  { ticker: 'NVDA', shares: 8, acquisitionPrice: 750.00, investmentSize: 6000.00 },
+  { ticker: 'MSFT', shares: 6, acquisitionPrice: 400.00, investmentSize: 2400.00 },
+  { ticker: 'GOOGL', shares: 12, acquisitionPrice: 142.00, investmentSize: 1704.00 },
+]
 const DEFAULT_SETTINGS: AppSettings = {
   tickers: DEFAULT_TICKERS,
+  holdings: DEFAULT_HOLDINGS,
   email: '',
   timezone: 'America/New_York',
   scheduleTime: '07:00',
@@ -211,7 +227,16 @@ function loadSettings(): AppSettings {
     const stored = localStorage.getItem('stockpulse_settings')
     if (stored) {
       const parsed = JSON.parse(stored)
-      return { ...DEFAULT_SETTINGS, ...parsed }
+      const merged = { ...DEFAULT_SETTINGS, ...parsed }
+      // Backward compat: if holdings is missing but tickers exist, create skeleton holdings
+      if (!Array.isArray(merged.holdings) || merged.holdings.length === 0) {
+        if (Array.isArray(merged.tickers) && merged.tickers.length > 0) {
+          merged.holdings = merged.tickers.map((t: string) => ({ ticker: t, shares: 0, acquisitionPrice: 0, investmentSize: 0 }))
+        } else {
+          merged.holdings = DEFAULT_HOLDINGS
+        }
+      }
+      return merged
     }
   } catch { /* ignore */ }
   return DEFAULT_SETTINGS
@@ -267,6 +292,84 @@ function getRiskColor(risk: string): string {
   if (r.includes('medium')) return 'text-amber-700'
   if (r.includes('low')) return 'text-green-700'
   return 'text-gray-700'
+}
+
+// ─── CSV / Portfolio Helpers ─────────────────────────────────────────────────
+
+function parseCSVToHoldings(csvText: string): { holdings: Holding[]; errors: string[] } {
+  const lines = csvText.trim().split('\n').map(l => l.trim()).filter(Boolean)
+  if (lines.length === 0) return { holdings: [], errors: ['CSV file is empty'] }
+
+  const holdings: Holding[] = []
+  const errors: string[] = []
+
+  // Detect header row
+  const firstLine = lines[0].toLowerCase()
+  const hasHeader = firstLine.includes('ticker') || firstLine.includes('symbol') || firstLine.includes('stock')
+  const dataLines = hasHeader ? lines.slice(1) : lines
+
+  for (let i = 0; i < dataLines.length; i++) {
+    const lineNum = hasHeader ? i + 2 : i + 1
+    const parts = dataLines[i].split(/[,;\t]/).map(p => p.trim().replace(/^["']|["']$/g, ''))
+
+    if (parts.length < 2) {
+      errors.push(`Line ${lineNum}: insufficient columns (need at least ticker and shares)`)
+      continue
+    }
+
+    const ticker = parts[0].toUpperCase().replace(/[^A-Z0-9.]/g, '')
+    if (!ticker) {
+      errors.push(`Line ${lineNum}: invalid or missing ticker`)
+      continue
+    }
+
+    const shares = parseFloat(parts[1])
+    if (isNaN(shares) || shares <= 0) {
+      errors.push(`Line ${lineNum}: invalid shares value "${parts[1]}"`)
+      continue
+    }
+
+    const acqPrice = parts.length >= 3 ? parseFloat(parts[2]) : 0
+    const investmentSize = parts.length >= 4 ? parseFloat(parts[3]) : (acqPrice > 0 ? shares * acqPrice : 0)
+
+    holdings.push({
+      ticker,
+      shares,
+      acquisitionPrice: isNaN(acqPrice) ? 0 : acqPrice,
+      investmentSize: isNaN(investmentSize) ? 0 : investmentSize,
+    })
+  }
+
+  return { holdings, errors }
+}
+
+function generateCSVTemplate(): string {
+  return 'Ticker,Shares,Acquisition Price,Investment Size\nAAPL,10,175.00,1750.00\nTSLA,5,240.00,1200.00\nNVDA,8,750.00,6000.00'
+}
+
+function downloadCSV(content: string, filename: string) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  link.click()
+  URL.revokeObjectURL(url)
+}
+
+function holdingsToCSV(holdings: Holding[]): string {
+  const header = 'Ticker,Shares,Acquisition Price,Investment Size'
+  const rows = holdings.map(h => `${h.ticker},${h.shares},${h.acquisitionPrice.toFixed(2)},${h.investmentSize.toFixed(2)}`)
+  return [header, ...rows].join('\n')
+}
+
+function buildPortfolioContext(holdings: Holding[]): string {
+  if (!Array.isArray(holdings) || holdings.length === 0) return ''
+  const totalInvested = holdings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
+  const lines = holdings.map(h =>
+    `${h.ticker}: ${h.shares} shares @ $${h.acquisitionPrice.toFixed(2)} (invested: $${h.investmentSize.toFixed(2)})`
+  )
+  return `\n\nPortfolio details (total invested: $${totalInvested.toFixed(2)}):\n${lines.join('\n')}\n\nPlease factor in acquisition prices when computing gains/losses and providing recommendations.`
 }
 
 // ─── ErrorBoundary ───────────────────────────────────────────────────────────
@@ -634,8 +737,11 @@ function ReportView({ report }: { report: PortfolioReport }) {
   )
 }
 
-function SummaryTiles({ report }: { report: PortfolioReport | null }) {
+function SummaryTiles({ report, holdings }: { report: PortfolioReport | null; holdings: Holding[] }) {
   const priceMovements = Array.isArray(report?.price_movements) ? report.price_movements : []
+  const safeHoldings = Array.isArray(holdings) ? holdings : []
+  const totalInvested = safeHoldings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
+  const totalShares = safeHoldings.reduce((sum, h) => sum + (h.shares || 0), 0)
 
   const topGainer = priceMovements.reduce<PriceMovement | null>((best, pm) => {
     const val = parseFloat((pm?.percent_change ?? '0').replace(/[^-\d.]/g, ''))
@@ -657,6 +763,16 @@ function SummaryTiles({ report }: { report: PortfolioReport | null }) {
         <div className={`font-serif text-xl font-medium ${report?.portfolio_health ? ((report.portfolio_health).toLowerCase().includes('strong') ? 'text-green-700' : 'text-amber-700') : 'text-muted-foreground'}`}>
           {report?.portfolio_health ?? 'Awaiting Analysis'}
         </div>
+      </div>
+
+      {/* Total Invested */}
+      <div className="border border-border bg-card p-5">
+        <div className="text-xs tracking-widest text-muted-foreground uppercase mb-2">Total Invested</div>
+        <div className="font-mono text-lg font-medium flex items-center gap-1">
+          <FiDollarSign className="w-4 h-4 text-primary" />
+          {totalInvested > 0 ? totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '--'}
+        </div>
+        <p className="text-xs text-muted-foreground mt-1">{totalShares} total shares across {safeHoldings.length} positions</p>
       </div>
 
       {/* Top Gainer */}
@@ -696,7 +812,7 @@ function SummaryTiles({ report }: { report: PortfolioReport | null }) {
       {/* Holdings Count */}
       <div className="border border-border bg-card p-5">
         <div className="text-xs tracking-widest text-muted-foreground uppercase mb-2">Holdings Tracked</div>
-        <div className="font-mono text-xl font-medium">{priceMovements.length}</div>
+        <div className="font-mono text-xl font-medium">{priceMovements.length > 0 ? priceMovements.length : safeHoldings.length}</div>
       </div>
 
       {/* Quick Recommendations */}
@@ -718,14 +834,16 @@ function SummaryTiles({ report }: { report: PortfolioReport | null }) {
   )
 }
 
-function DashboardScreen({ report, loading, loadingMessage, onGenerate, sampleMode }: {
+function DashboardScreen({ report, loading, loadingMessage, onGenerate, sampleMode, holdings }: {
   report: PortfolioReport | null
   loading: boolean
   loadingMessage: string
   onGenerate: () => void
   sampleMode: boolean
+  holdings: Holding[]
 }) {
   const displayReport = sampleMode && !report ? SAMPLE_REPORT : report
+  const displayHoldings = sampleMode && (!Array.isArray(holdings) || holdings.length === 0) ? DEFAULT_HOLDINGS : holdings
 
   return (
     <div className="h-full">
@@ -755,7 +873,7 @@ function DashboardScreen({ report, loading, loadingMessage, onGenerate, sampleMo
           </div>
           {/* Sidebar Tiles */}
           <div className="w-64 flex-shrink-0">
-            <SummaryTiles report={displayReport} />
+            <SummaryTiles report={displayReport} holdings={displayHoldings} />
           </div>
         </div>
       )}
@@ -869,20 +987,143 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
   scheduleLoading: boolean
   statusMessage: { type: 'success' | 'error' | 'info'; text: string } | null
 }) {
-  const [tickerInput, setTickerInput] = useState('')
   const [localEmail, setLocalEmail] = useState(settings.email)
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
+  const [showAddHolding, setShowAddHolding] = useState(false)
+  const [editingIdx, setEditingIdx] = useState<number | null>(null)
+  const [holdingForm, setHoldingForm] = useState<{ ticker: string; shares: string; acqPrice: string; investmentSize: string }>({ ticker: '', shares: '', acqPrice: '', investmentSize: '' })
+  const [csvErrors, setCsvErrors] = useState<string[]>([])
+  const [uploadMsg, setUploadMsg] = useState<string | null>(null)
+  const fileInputRef = React.useRef<HTMLInputElement>(null)
 
-  const handleAddTicker = () => {
-    const ticker = tickerInput.trim().toUpperCase()
-    if (ticker && !settings.tickers.includes(ticker)) {
-      onSettingsChange({ ...settings, tickers: [...settings.tickers, ticker] })
-    }
-    setTickerInput('')
+  const safeHoldings = Array.isArray(settings.holdings) ? settings.holdings : []
+  const totalInvested = safeHoldings.reduce((sum, h) => sum + (h.investmentSize || 0), 0)
+
+  const resetForm = () => {
+    setHoldingForm({ ticker: '', shares: '', acqPrice: '', investmentSize: '' })
+    setShowAddHolding(false)
+    setEditingIdx(null)
   }
 
-  const handleRemoveTicker = (t: string) => {
-    onSettingsChange({ ...settings, tickers: settings.tickers.filter(x => x !== t) })
+  const handleAddOrUpdateHolding = () => {
+    const ticker = holdingForm.ticker.trim().toUpperCase()
+    if (!ticker) return
+    const shares = parseFloat(holdingForm.shares) || 0
+    const acqPrice = parseFloat(holdingForm.acqPrice) || 0
+    let investmentSize = parseFloat(holdingForm.investmentSize) || 0
+    if (investmentSize === 0 && shares > 0 && acqPrice > 0) {
+      investmentSize = shares * acqPrice
+    }
+
+    const newHolding: Holding = { ticker, shares, acquisitionPrice: acqPrice, investmentSize }
+
+    let updatedHoldings: Holding[]
+    let updatedTickers: string[]
+
+    if (editingIdx !== null) {
+      updatedHoldings = [...safeHoldings]
+      updatedHoldings[editingIdx] = newHolding
+    } else {
+      const existingIdx = safeHoldings.findIndex(h => h.ticker === ticker)
+      if (existingIdx >= 0) {
+        updatedHoldings = [...safeHoldings]
+        updatedHoldings[existingIdx] = newHolding
+      } else {
+        updatedHoldings = [...safeHoldings, newHolding]
+      }
+    }
+
+    updatedTickers = updatedHoldings.map(h => h.ticker)
+    onSettingsChange({ ...settings, holdings: updatedHoldings, tickers: updatedTickers })
+    resetForm()
+  }
+
+  const handleRemoveHolding = (idx: number) => {
+    const updatedHoldings = safeHoldings.filter((_, i) => i !== idx)
+    const updatedTickers = updatedHoldings.map(h => h.ticker)
+    onSettingsChange({ ...settings, holdings: updatedHoldings, tickers: updatedTickers })
+  }
+
+  const handleEditHolding = (idx: number) => {
+    const h = safeHoldings[idx]
+    if (!h) return
+    setHoldingForm({
+      ticker: h.ticker,
+      shares: h.shares.toString(),
+      acqPrice: h.acquisitionPrice.toString(),
+      investmentSize: h.investmentSize.toString(),
+    })
+    setEditingIdx(idx)
+    setShowAddHolding(true)
+  }
+
+  const handleCSVUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvErrors([])
+    setUploadMsg(null)
+
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string
+      if (!text) {
+        setCsvErrors(['Could not read file'])
+        return
+      }
+      const { holdings: parsed, errors } = parseCSVToHoldings(text)
+      if (errors.length > 0) setCsvErrors(errors)
+      if (parsed.length > 0) {
+        const updatedTickers = parsed.map(h => h.ticker)
+        onSettingsChange({ ...settings, holdings: parsed, tickers: updatedTickers })
+        setUploadMsg(`Imported ${parsed.length} holdings from CSV`)
+        setTimeout(() => setUploadMsg(null), 4000)
+      }
+    }
+    reader.onerror = () => setCsvErrors(['Failed to read file'])
+    reader.readAsText(file)
+
+    // Reset the input so re-uploading the same file triggers onChange
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleJSONUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvErrors([])
+    setUploadMsg(null)
+
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target?.result as string
+      if (!text) {
+        setCsvErrors(['Could not read file'])
+        return
+      }
+      try {
+        const data = JSON.parse(text)
+        const arr = Array.isArray(data) ? data : (Array.isArray(data.holdings) ? data.holdings : [])
+        const parsed: Holding[] = []
+        for (const item of arr) {
+          const ticker = (item.ticker || item.symbol || item.Ticker || item.Symbol || '').toString().toUpperCase().trim()
+          if (!ticker) continue
+          const shares = parseFloat(item.shares || item.Shares || item.quantity || item.Quantity || '0')
+          const acqPrice = parseFloat(item.acquisitionPrice || item.acquisition_price || item.acqPrice || item.price || item.Price || item.cost || item.Cost || '0')
+          const investmentSize = parseFloat(item.investmentSize || item.investment_size || item.invested || item.Invested || '0') || (shares * acqPrice)
+          parsed.push({ ticker, shares: isNaN(shares) ? 0 : shares, acquisitionPrice: isNaN(acqPrice) ? 0 : acqPrice, investmentSize: isNaN(investmentSize) ? 0 : investmentSize })
+        }
+        if (parsed.length > 0) {
+          const updatedTickers = parsed.map(h => h.ticker)
+          onSettingsChange({ ...settings, holdings: parsed, tickers: updatedTickers })
+          setUploadMsg(`Imported ${parsed.length} holdings from JSON`)
+          setTimeout(() => setUploadMsg(null), 4000)
+        } else {
+          setCsvErrors(['No valid holdings found in JSON. Expected array with objects containing: ticker, shares, acquisitionPrice, investmentSize'])
+        }
+      } catch {
+        setCsvErrors(['Invalid JSON file'])
+      }
+    }
+    reader.readAsText(file)
   }
 
   const handleSave = () => {
@@ -900,6 +1141,23 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
     onSaveEmail(localEmail)
   }
 
+  // Auto-calc investment size when shares or acq price change
+  const autoCalcRef = React.useRef('')
+  useEffect(() => {
+    const shares = parseFloat(holdingForm.shares)
+    const acqPrice = parseFloat(holdingForm.acqPrice)
+    if (!isNaN(shares) && !isNaN(acqPrice) && shares > 0 && acqPrice > 0) {
+      const autoCalc = (shares * acqPrice).toFixed(2)
+      setHoldingForm(prev => {
+        if (!prev.investmentSize || prev.investmentSize === autoCalcRef.current) {
+          autoCalcRef.current = autoCalc
+          return { ...prev, investmentSize: autoCalc }
+        }
+        return prev
+      })
+    }
+  }, [holdingForm.shares, holdingForm.acqPrice])
+
   return (
     <div>
       <div className="mb-6">
@@ -907,30 +1165,193 @@ function SettingsScreen({ settings, onSettingsChange, schedule, scheduleId, exec
         <p className="text-sm text-muted-foreground tracking-wider mt-1">Configure your portfolio and delivery preferences</p>
       </div>
 
-      <div className="space-y-6 max-w-2xl">
-        {/* Portfolio Holdings */}
+      <div className="space-y-6 max-w-3xl">
+        {/* Portfolio Holdings — Import/Export Bar */}
         <div className="border border-border bg-card p-6">
-          <h3 className="font-serif text-sm font-medium tracking-widest uppercase mb-4">Portfolio Holdings</h3>
-          <div className="flex gap-2 mb-4">
-            <input
-              type="text"
-              value={tickerInput}
-              onChange={(e) => setTickerInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleAddTicker() }}
-              placeholder="Add ticker (e.g. AMZN)"
-              className="flex-1 px-4 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-            />
-            <button onClick={handleAddTicker} className="px-4 py-2 bg-primary text-primary-foreground text-sm tracking-wider">Add</button>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {settings.tickers.map((t) => (
-              <span key={t} className="inline-flex items-center gap-1 px-3 py-1.5 bg-secondary text-sm font-mono border border-border">
-                {t}
-                <button onClick={() => handleRemoveTicker(t)} className="ml-1 text-muted-foreground hover:text-foreground"><FiX className="w-3 h-3" /></button>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-serif text-sm font-medium tracking-widest uppercase">Portfolio Holdings</h3>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground font-mono">
+                {safeHoldings.length} position{safeHoldings.length !== 1 ? 's' : ''} | ${totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2 })} invested
               </span>
-            ))}
-            {settings.tickers.length === 0 && <span className="text-sm text-muted-foreground">No tickers configured</span>}
+            </div>
           </div>
+
+          {/* Import / Export Actions */}
+          <div className="flex flex-wrap items-center gap-2 mb-5 pb-5 border-b border-border">
+            <input type="file" ref={fileInputRef} accept=".csv,.tsv,.txt" onChange={handleCSVUpload} className="hidden" id="csv-upload" />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
+            >
+              <FiUpload className="w-3 h-3" /> Import CSV
+            </button>
+            <input type="file" accept=".json" onChange={handleJSONUpload} className="hidden" id="json-upload" />
+            <label htmlFor="json-upload" className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2 cursor-pointer">
+              <FiUpload className="w-3 h-3" /> Import JSON
+            </label>
+            <button
+              onClick={() => downloadCSV(generateCSVTemplate(), 'portfolio_template.csv')}
+              className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
+            >
+              <FiDownload className="w-3 h-3" /> CSV Template
+            </button>
+            {safeHoldings.length > 0 && (
+              <button
+                onClick={() => downloadCSV(holdingsToCSV(safeHoldings), 'my_portfolio.csv')}
+                className="px-4 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border hover:bg-muted transition-colors flex items-center gap-2"
+              >
+                <FiDownload className="w-3 h-3" /> Export CSV
+              </button>
+            )}
+            <button
+              onClick={() => { resetForm(); setShowAddHolding(true) }}
+              className="px-4 py-2 bg-primary text-primary-foreground text-xs tracking-wider flex items-center gap-2"
+            >
+              <FiPlus className="w-3 h-3" /> Add Holding
+            </button>
+          </div>
+
+          {/* Upload messages */}
+          {uploadMsg && (
+            <div className="mb-4 flex items-center gap-2 text-xs text-green-700">
+              <FiCheckCircle className="w-3 h-3" /> {uploadMsg}
+            </div>
+          )}
+          {csvErrors.length > 0 && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-xs text-red-700">
+              <div className="flex items-center gap-1 mb-1 font-medium"><FiAlertCircle className="w-3 h-3" /> Import Warnings</div>
+              {csvErrors.slice(0, 5).map((err, i) => <p key={i}>{err}</p>)}
+              {csvErrors.length > 5 && <p>...and {csvErrors.length - 5} more</p>}
+              <button onClick={() => setCsvErrors([])} className="mt-2 text-red-600 underline">Dismiss</button>
+            </div>
+          )}
+
+          {/* CSV Format Hint */}
+          <div className="mb-5 p-3 bg-secondary border border-border text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">CSV format:</span> Ticker, Shares, Acquisition Price, Investment Size (one row per holding). Headers are optional. Delimiter: comma, semicolon, or tab. JSON: array of objects with ticker, shares, acquisitionPrice, investmentSize fields.
+          </div>
+
+          {/* Add/Edit Holding Form */}
+          {showAddHolding && (
+            <div className="mb-5 p-4 border border-primary bg-primary/5">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs tracking-widest uppercase font-medium">{editingIdx !== null ? 'Edit Holding' : 'Add New Holding'}</span>
+                <button onClick={resetForm} className="text-muted-foreground hover:text-foreground"><FiX className="w-4 h-4" /></button>
+              </div>
+              <div className="grid grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Ticker</label>
+                  <input
+                    type="text"
+                    value={holdingForm.ticker}
+                    onChange={(e) => setHoldingForm(prev => ({ ...prev, ticker: e.target.value.toUpperCase() }))}
+                    placeholder="e.g. AAPL"
+                    className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Number of Shares</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={holdingForm.shares}
+                    onChange={(e) => setHoldingForm(prev => ({ ...prev, shares: e.target.value }))}
+                    placeholder="e.g. 10"
+                    className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Acquisition Price ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={holdingForm.acqPrice}
+                    onChange={(e) => setHoldingForm(prev => ({ ...prev, acqPrice: e.target.value }))}
+                    placeholder="e.g. 175.00"
+                    className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs tracking-widest text-muted-foreground uppercase block mb-1">Investment Size ($)</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={holdingForm.investmentSize}
+                    onChange={(e) => setHoldingForm(prev => ({ ...prev, investmentSize: e.target.value }))}
+                    placeholder="Auto-calculated"
+                    className="w-full px-3 py-2 border border-border bg-background text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleAddOrUpdateHolding}
+                  disabled={!holdingForm.ticker.trim()}
+                  className="px-5 py-2 bg-primary text-primary-foreground text-xs tracking-wider disabled:opacity-50"
+                >
+                  {editingIdx !== null ? 'Update' : 'Add'}
+                </button>
+                <button onClick={resetForm} className="px-5 py-2 bg-secondary text-foreground text-xs tracking-wider border border-border">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Holdings Table */}
+          {safeHoldings.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border">
+                    <th className="text-left py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Ticker</th>
+                    <th className="text-right py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Shares</th>
+                    <th className="text-right py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Acq. Price</th>
+                    <th className="text-right py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal">Invested</th>
+                    <th className="text-center py-2 px-3 text-xs tracking-widest text-muted-foreground uppercase font-normal w-20">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {safeHoldings.map((h, idx) => (
+                    <tr key={`${h.ticker}-${idx}`} className="border-b border-border last:border-0 hover:bg-muted transition-colors">
+                      <td className="py-3 px-3 font-mono font-medium">{h.ticker}</td>
+                      <td className="py-3 px-3 text-right font-mono">{h.shares}</td>
+                      <td className="py-3 px-3 text-right font-mono">${h.acquisitionPrice.toFixed(2)}</td>
+                      <td className="py-3 px-3 text-right font-mono">${h.investmentSize.toFixed(2)}</td>
+                      <td className="py-3 px-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          <button onClick={() => handleEditHolding(idx)} className="text-muted-foreground hover:text-primary transition-colors" title="Edit">
+                            <FiEdit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button onClick={() => handleRemoveHolding(idx)} className="text-muted-foreground hover:text-red-600 transition-colors" title="Remove">
+                            <FiTrash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t border-border bg-secondary">
+                    <td className="py-3 px-3 text-xs tracking-widest text-muted-foreground uppercase font-medium">Total</td>
+                    <td className="py-3 px-3 text-right font-mono font-medium">{safeHoldings.reduce((s, h) => s + h.shares, 0)}</td>
+                    <td className="py-3 px-3 text-right font-mono text-muted-foreground">--</td>
+                    <td className="py-3 px-3 text-right font-mono font-medium">${totalInvested.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
+                    <td></td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              <FiBarChart2 className="w-8 h-8 mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No holdings configured. Add holdings manually or import via CSV/JSON.</p>
+            </div>
+          )}
         </div>
 
         {/* Delivery Email */}
@@ -1181,7 +1602,9 @@ export default function Page() {
     setActiveAgentId(COORDINATOR_AGENT_ID)
 
     const tickers = settings.tickers.length > 0 ? settings.tickers : DEFAULT_TICKERS
-    const message = `Generate the daily portfolio analysis report for the following stock tickers: ${tickers.join(', ')}. Provide comprehensive analysis covering market data, news sentiment, technical indicators, and actionable recommendations.`
+    const safeHoldings = Array.isArray(settings.holdings) ? settings.holdings : []
+    const portfolioContext = buildPortfolioContext(safeHoldings)
+    const message = `Generate the daily portfolio analysis report for the following stock tickers: ${tickers.join(', ')}. Provide comprehensive analysis covering market data, news sentiment, technical indicators, and actionable recommendations.${portfolioContext}`
 
     try {
       const result = await callAIAgent(message, COORDINATOR_AGENT_ID)
@@ -1244,7 +1667,9 @@ export default function Page() {
     setEmailStatusMessage({ type: 'info', text: 'Syncing email with schedule...' })
     try {
       const tickers = settings.tickers.length > 0 ? settings.tickers : DEFAULT_TICKERS
-      const newMsg = `Generate the daily portfolio analysis report for the following stock tickers: ${tickers.join(', ')}. Provide comprehensive analysis and send the report via email to ${email}.`
+      const safeHoldings = Array.isArray(settings.holdings) ? settings.holdings : []
+      const portfolioContext = buildPortfolioContext(safeHoldings)
+      const newMsg = `Generate the daily portfolio analysis report for the following stock tickers: ${tickers.join(', ')}. Provide comprehensive analysis and send the report via email to ${email}.${portfolioContext}`
       const result = await updateScheduleMessage(scheduleId, newMsg)
       if (result.success && result.newScheduleId) {
         setScheduleId(result.newScheduleId)
@@ -1258,7 +1683,7 @@ export default function Page() {
     }
     setScheduleLoading(false)
     setTimeout(() => setEmailStatusMessage(null), 5000)
-  }, [scheduleId, settings.tickers, loadScheduleData])
+  }, [scheduleId, settings.tickers, settings.holdings, loadScheduleData])
 
   // Clear history
   const handleClearHistory = () => {
@@ -1311,6 +1736,7 @@ export default function Page() {
                 loadingMessage={loadingMessage}
                 onGenerate={handleGenerateReport}
                 sampleMode={sampleMode}
+                holdings={Array.isArray(settings.holdings) ? settings.holdings : []}
               />
             )}
             {activeScreen === 'history' && (
